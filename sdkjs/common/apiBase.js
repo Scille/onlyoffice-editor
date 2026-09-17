@@ -3236,10 +3236,16 @@
 
 		return AscCommon.History.Can_Redo();
 	};
-	// Offline mode
 	baseEditorsApi.prototype.asc_isOffline  = function()
 	{
-		return (window.location.protocol.indexOf("file") == 0) ? true : false;
+		// Vanilla OnlyOffice only checks for file:// URL (i.e. desktop release
+		// of OnlyOffice that serves file from the FS).
+		// However, in an end-to-end configuration, the decryption step means we
+		// always serve the file from memory...
+		// Hence this global variable to force offline mode (which is done in
+		// `DocEditor.init`).
+		return (window["__OOCryptPadOffline"] === true)
+			|| (window.location.protocol.indexOf("file") == 0) ? true : false;
 	};
 	baseEditorsApi.prototype.asc_getUrlType = function(url)
 	{
