@@ -48,7 +48,10 @@ if (window.Common === undefined) {
             },
 
             'openDocumentFromBinary': function(data) {
-                $me.trigger('opendocumentfrombinary', data);
+                // Wrap `data` in an array since it is itself an array-like (i.e. `Uint8Array`).
+                // Without this jQuery's `.trigger(name, params)` wants to spread `data`'s bytes
+                // as thousands of handler arguments...
+                $me.trigger('opendocumentfrombinary', [data]);
             },
 
             'showMessage': function(data) {
