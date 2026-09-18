@@ -1,6 +1,5 @@
 import { EventHandler, HandlerHandle } from "./eventHandler";
 import { deepAssign, noop, waitForEvent } from "./utils";
-import { createChannel, mkEvent } from "./worker-channel";
 
 let DocEditorOrig: any;
 
@@ -53,29 +52,6 @@ export class DocEditor implements DocEditorInterface {
         this.toOOHandler.addHandler((msg) =>
             this.origEditor.cryptPadMessageToOO(msg),
         );
-    }
-
-    installLegacyChannel() {
-        const msgEv = mkEvent();
-        const iframe = this.getIframe().contentWindow;
-        window.addEventListener("message", (msg) => {
-            if (msg.source !== iframe) {
-                return;
-            }
-            msgEv.fire(msg);
-        });
-        const postMsg = (data: any) => {
-            iframe.postMessage(data);
-        };
-        createChannel(msgEv, postMsg, (chan: any) => {
-            this.toOOHandler.addHandler((obj: ToOO) => {
-                chan.event("CMD", obj);
-            });
-
-            chan.on("CMD", (e: FromOO) => {
-                this.fromOOHandler.fire(e);
-            });
-        });
     }
 
     destroyEditor() {
