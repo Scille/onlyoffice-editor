@@ -2638,21 +2638,49 @@
 				}
 			};
 		}
-		// CryptPad print
-		if (window.parent.APP.printPdf && (DownloadType.Print === downloadType || !downloadType)) {
-			var _cb = options.callback || this.fCurCallback;
+		// CryptPad print/download host hooks.
+		//
+		// `_downloadAsUsingServer` is the single choke point every editor's
+		// `_downloadAs` funnels into (word/cell/slide call it directly from their
+		// in-browser fallbacks, and `downloadAs` calls it when `_downloadAs` falls
+		// through), so hooking here covers all editor types.
+		//
+		// Notes:
+		// - Regular save is not routed here, hence we only deal with PDF print and
+		//   download as.
+		// - At this point the document has already been serialized in-browser
+		//   into `dataContainer.data`.
+		// - `downloadType` is set to None for both print and download-as, so we
+		//   cannot use `downloadType === DownloadType.Print` :/
+		// - The callback should be passed either `null` (ends the editor action cleanly),
+		//   or `{status:'ok',data:url,...}` (like the server would return, its is
+		//   then fed it back to the editor print/download pipeline ).
+		if (window.parent.APP.printPdf && options.isPdfPrint) {
+			var _cbPrint = options.callback || this.fCurCallback;
 			window.parent.APP.printPdf(dataContainer, function (obj) {
 				if (!obj) {
 					t.sync_EndAction(c_oAscAsyncActionType.BlockInteraction, actionType);
 					return;
 				}
-				_cb(obj);
+				_cbPrint(obj);
 			});
 			return;
 		}
-		AscCommon.saveWithParts(function(fCallback1, oAdditionalData1, dataContainer1) {
-			AscCommon.sendCommand(t, fCallback1, oAdditionalData1, dataContainer1);
-		}, this.fCurCallback, options.callback, oAdditionalData, dataContainer);
+		if (window.parent.APP.downloadAs && !downloadType) {
+			var _cbDownload = options.callback || this.fCurCallback;
+			window.parent.APP.downloadAs(dataContainer, function (obj) {
+				if (!obj) {
+					t.sync_EndAction(c_oAscAsyncActionType.BlockInteraction, actionType);
+					return;
+				}
+				_cbDownload(obj);
+			});
+			return;
+		}
+		// Here we have removed the vanilla OnlyOffice code that do a POST to `/downloadas`
+		// (hence sending the document in cleartext to the server), since this is
+		// never what an end-to-end-encrypted system wants to do!
+		console.error("Unexpected download type", actionType, options, downloadType);
 	};
 	baseEditorsApi.prototype._downloadOriginalFile = function (directUrl, url, fileType, token, callback)
 	{
