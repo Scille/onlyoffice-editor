@@ -1727,20 +1727,6 @@
   DocsCoApi.prototype._initSocksJs = function () {
     const socketio = this.socketio = {};
 
-    const license = {
-        type: 'license',
-        license: {
-            type: 3,
-            mode: 0,
-            // light: false,
-            // trial: false,
-            rights: 1,
-            buildVersion: "7.3.3",
-            buildNumber: 8,
-            // branding: false
-        }
-    };
-
     let p = window.parent;
 
     // Presenter mode in slides
@@ -1778,10 +1764,6 @@
         console.log('Close realtime');
     };
 
-
-    setTimeout(() => {
-        this._onServerMessage(license);
-    });
     return socketio;
 };
 
