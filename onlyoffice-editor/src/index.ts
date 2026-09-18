@@ -32,6 +32,15 @@ export class DocEditor implements DocEditorInterface {
 
     constructor(placeholderId: string) {
         this.placeholderId = placeholderId;
+
+        // Cryptpad changes on OnlyOffice often rely on a `window.APP` object to
+        // store its hooks. However this `window.APP` was never defined in this
+        // codebase (and instead was set in CryptPad code :/).
+        // see:
+        // - sdkjs/slide/api.js:7320 (hook on editor theme change)
+        // - https://github.com/cryptpad/cryptpad/blob/9808cf25c1091d6cf532df13bf5a70ba332f8d4d/www/common/onlyoffice/inner.js#L65)
+        const w = window as any;
+        w.APP = w.APP ?? {};
     }
 
     /**
