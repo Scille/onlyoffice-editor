@@ -88,9 +88,6 @@ export class DocEditor implements DocEditorInterface {
             : (name: string, callback: (url: string) => void) => callback("");
 
         this.fromOOHandle = this.fromOOHandler.addHandler((msg) => {
-            if (msg.type == "auth") {
-                this.handleAuth(msg);
-            }
             this.server.onMessage(msg);
         });
 
@@ -98,47 +95,6 @@ export class DocEditor implements DocEditorInterface {
             this.corruptionWarningHandler.addHandler(
                 server.onCorruptionWarning,
             );
-        }
-    }
-
-    private handleAuth(authMsg: FromOO) {
-        // Answer to the auth command
-        const initalChanges = this.server.getInitialChanges
-            ? this.server.getInitialChanges()
-            : [];
-        const p = this.server.getParticipants();
-
-        this.sendMessageToOO({
-            type: "authChanges",
-            changes: initalChanges,
-        });
-
-        this.sendMessageToOO({
-            type: "auth",
-            result: 1,
-            sessionId: "session-id",
-            participants: p.list,
-            locks: [],
-            changes: initalChanges,
-            changesIndex: 0,
-            indexUser: p.index,
-            buildVersion: "5.2.6",
-            buildNumber: 2,
-            licenseType: 3,
-        });
-
-        // Open the document
-        this.sendMessageToOO({
-            type: "documentOpen",
-            data: {
-                type: "open",
-                status: "ok",
-                data: { "Editor.bin": authMsg.openCmd.url },
-            },
-        });
-
-        if (this.server.onAuth) {
-            this.server.onAuth();
         }
     }
 
@@ -253,27 +209,9 @@ interface OrigDocEditorInterface extends DocEditorInterface {
 }
 
 interface MockServer {
-    getInitialChanges?: () => any[];
-    getParticipants: () => Participants;
     getImageURL?: (name: string) => Promise<string>;
-    onAuth?: () => void;
     onMessage: (msg: FromOO) => void;
     onCorruptionWarning?: (duplicateId: string) => void;
-}
-
-interface Participants {
-    index: number;
-    list: [Participant];
-}
-
-interface Participant {
-    id: number;
-    idOriginal: string;
-    username: string;
-    indexUser: number;
-    connectionId: string;
-    isCloseCoAuthoring: boolean;
-    view: boolean;
 }
 
 async function loadAndPatchOOOrig() {
