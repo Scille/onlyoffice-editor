@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>OnlyOffice — local-only mode demo</title>
+    <style>
+        html, body { height: 100%; margin: 0; font: 14px sans-serif; }
+        #bar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: #f5f5f5; border-bottom: 1px solid #ddd; }
+        #bar button { padding: 5px 12px; cursor: pointer; }
+        #status { margin-left: auto; color: #444; font-variant-numeric: tabular-nums; }
+        #placeholder { position: absolute; left: 0; right: 0; top: 40px; bottom: 0; }
+    </style>
+</head>
+<body>
+    <div id="bar">
+        <button id="btn-save" disabled>Save (.bin to local storage)</button>
+        <button id="btn-reload" disabled>Reload from local storage</button>
+        <button id="btn-delete" disabled>Delete document from local storage</button>
+        <span id="status">booting…</span>
+    </div>
+    <div id="placeholder"></div>
+
+    <!--
+        The OnlyOffice wrapper. Serves from the built sdkjs/deploy tree. The
+        script tag's `src` path is how the wrapper finds `api-orig.js` (the
+        vanilla OnlyOffice API) to load next to itself.
+    -->
+    <script type="text/javascript" src="/web-apps/apps/api/documents/api.js"></script>
+    <script type="module" src="./app.js"></script>
+</body>
+</html>

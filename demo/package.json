@@ -1,0 +1,14 @@
+{
+  "name": "demo",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "OnlyOffice local (no-server) mode demo",
+  "scripts": {
+    "demo": "cd ../onlyoffice-editor && npm run build && cp dist/api.js ../sdkjs/deploy/web-apps/apps/api/documents && cd ../demo && node server.mjs",
+    "smoke": "node smoke.mjs",
+    "smoke:all": "npm run smoke -- word && npm run smoke -- cell && npm run smoke -- slide"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.0"
+  }
+}
