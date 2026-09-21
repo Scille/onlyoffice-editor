@@ -4,7 +4,7 @@
 # this repo (the CryptPad fork of sdkjs + web-apps + the onlyoffice-editor
 # wrapper).
 #
-# This mirrors the Dockerfile `files-build` / `zip-build` stages, but runs
+# This mirrors the Dockerfile `files-build` / `package-build` stages, but runs
 # locally (no Docker) so you can tweak the OnlyOffice source and rebuild fast.
 #
 # Usage:

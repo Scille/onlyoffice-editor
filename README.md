@@ -1,14 +1,27 @@
 tl;dr:
+
 ```shell
-# Generates `output/onlyoffice-editor.zip`
-podman build --target build -o output .
-# Generates `output/onlyoffice-editor.zip`, but also includes:
+# Generates `output/onlyoffice-editor-<VERSION>.tgz`. `release_version` must be a valid
+# npm version.
+podman build --build-arg release_version=<VERSION> --target build -o output .
+# Generates the package with additional assets:
 # - The .br files, i.e. brotli-compressed assets (~100MB)
 # - The OnlyOffice help documentation (~500MB)
 # (Those add up a lot of space and are most likely not needed).
-podman build --target build -o output . \
+podman build --build-arg release_version=<VERSION> --target build -o output . \
   --build-arg INCLUDE_HELP=true \
   --build-arg PRECOMPRESSED_ASSETS=true \
+```
+
+The generated `output/onlyoffice-editor-<VERSION>.tgz` is an npm package to be used
+as project dependency:
+
+```json
+{
+  "dependencies": {
+    "onlyoffice-editor": "https://github.com/Scille/onlyoffice-editor/releases/download/v<VERSION>/onlyoffice-editor-<VERSION>.tgz"
+  }
+}
 ```
 
 ---
