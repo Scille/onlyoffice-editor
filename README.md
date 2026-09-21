@@ -1,3 +1,20 @@
+tl;dr:
+```shell
+# Generates `output/onlyoffice-editor.zip`
+podman build --target build -o output .
+# Generates `output/onlyoffice-editor.zip`, but also includes:
+# - The .br files, i.e. brotli-compressed assets (~100MB)
+# - The OnlyOffice help documentation (~500MB)
+# (Those add up a lot of space and are most likely not needed).
+podman build --target build -o output . \
+  --build-arg INCLUDE_HELP=true \
+  --build-arg PRECOMPRESSED_ASSETS=true \
+```
+
+---
+Original README
+---
+
 # TODO
 
 # Build onlyoffice-editor.zip

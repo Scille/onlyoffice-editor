@@ -41,6 +41,11 @@ RUN mv deploy/web-apps/apps/api/documents/api.js deploy/web-apps/apps/api/docume
 
 
 FROM base AS files-build
+# Skip by default the built-in editor documentation (apps/*/main/resources/help).
+# It is ~500MB (mostly per-language PNG screenshots) and is only used by the editors'
+# "?" help dialog (that can itself be disabled at runtime by setting `help: false`
+# in the option when opening the editor).
+ARG INCLUDE_HELP=false
 COPY --from=sdkjs-build /app/sdkjs/deploy/web-apps /app/web-apps
 COPY --from=sdkjs-build /app/sdkjs/deploy/sdkjs /app/sdkjs
 COPY vendor /app/web-apps/vendor
@@ -48,17 +53,24 @@ COPY fonts/*.ttf /app/fonts/fonts/
 COPY fonts/*.otf /app/fonts/fonts/
 COPY dictionaries /app/dictionaries
 COPY --from=onlyoffice-editor-build /app/dist/api.js /app/web-apps/apps/api/documents/api.js
+RUN if [ "$INCLUDE_HELP" != "true" ]; then rm -rf /app/web-apps/apps/*/main/resources/help; fi
 WORKDIR /app
 
 
 FROM files-build AS zip-build
-RUN find . -name "*.wasm" \
+# Precompressing assets with Brotli (so that the hosting server doesn't have to
+# run it on the fly). This adds ~100MB as the original source files must still
+# be included to support web clients that don't use `Accept-Encoding: br`.
+ARG PRECOMPRESSED_ASSETS=false
+RUN if [ "$INCLUDE_HELP" != "true" ]; then \
+find . -name "*.wasm" \
     -o -name "*.js" \
     -o -name "*.html" \
     -o -name "*.css" \
     -o -name "*.aff" \
     -o -name "*.dic" \
-    | xargs -P 8 -n 16 -- brotli
+    | xargs -P 8 -n 16 -- brotli \
+; fi
 RUN zip -r onlyoffice-editor.zip .
 RUN sha512sum onlyoffice-editor.zip > onlyoffice-editor.zip.sha512
 
