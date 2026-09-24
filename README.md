@@ -24,6 +24,14 @@ as project dependency:
 }
 ```
 
+Basically the build operation does:
+
+1. Build OnlyOffice the regular way.
+2. Build `onlyoffice-editor/` which generates a `index.ts` and `index.d.ts` files.
+3. Rename OnlyOffice's `web-apps/apps/api/documents/api.js` as `api-orig.js`.
+4. Overwrite OnlyOffice's `web-apps/apps/api/documents/api.js` with the `index.ts` from step 2.
+5. Copy `index.d.ts` file from step 2 as the final package typing info.
+
 ---
 Original README
 ---

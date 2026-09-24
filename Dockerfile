@@ -48,6 +48,7 @@ COPY fonts/*.ttf /app/fonts/fonts/
 COPY fonts/*.otf /app/fonts/fonts/
 COPY dictionaries /app/dictionaries
 COPY --from=onlyoffice-editor-build /app/dist/api.js /app/web-apps/apps/api/documents/api.js
+COPY --from=onlyoffice-editor-build /app/dist/index.d.ts /app/index.d.ts
 # Add minimal `package.json` to the release
 ARG release_version
 RUN test -n "$release_version" || { echo "release_version is required (for example: make build release_version=1.2.3)" >&2; exit 1; } \
@@ -62,8 +63,10 @@ RUN test -n "$release_version" || { echo "release_version is required (for examp
     '    "dictionaries",' \
     '    "fonts",' \
     '    "sdkjs",' \
-    '    "web-apps"' \
-    '  ]' \
+    '    "web-apps",' \
+    '    "index.d.ts"' \
+    '  ],' \
+    '  "types": "index.d.ts"' \
     '}' > /app/package.json
 # Skip by default the built-in editor documentation (apps/*/main/resources/help).
 # It is ~500MB (mostly per-language PNG screenshots) and is only used by the editors'

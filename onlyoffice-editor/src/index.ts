@@ -3,6 +3,8 @@ import { deepAssign, noop, waitForEvent } from "./utils";
 
 let DocEditorOrig: any;
 
+export type DocEditorConfig = any;
+
 /**
  * How to start the `DocEditor`:
  * ```
@@ -48,7 +50,7 @@ export class DocEditor implements DocEditorInterface {
      * Resolves once the editor app is ready. After that the caller is responsible
      * for pushing the `license` and opening the document with `loadBinary()`.
      */
-    async init(config: any, server: MockServer): Promise<void> {
+    async init(config: DocEditorConfig, server: MockServer): Promise<void> {
         await scriptLoadedPromise;
         let onAppReady;
         let onDocumentReady;
@@ -138,9 +140,9 @@ export class DocEditor implements DocEditorInterface {
         this.toOOHandler.fire(msg);
     }
 
-    private installHostHooks(config: any) {
+    private installHostHooks(config: DocEditorConfig) {
         const w = window as any;
-        const events = config?.events ?? {};
+        const events: DocEditorEvents = config?.events ?? {};
         const endAction = (dataContainer: any, cb: (obj?: any) => void) =>
             cb(null);
         if (events.onPrintPdf || this.offline) {
@@ -182,7 +184,7 @@ export class DocEditor implements DocEditorInterface {
      * see sdkjs/cell/view/DrawingObjectsController.js:46), pdf not at all.
      * Pick the first candidate that actually is an api (i.e. has `asc_Save`).
      */
-    private getApi(): any {
+    private getApi(): OOApi | null {
         const w = this.getIframe()?.contentWindow as any;
         for (const c of [w?.editor, w?.editorCell, w?.Asc?.editor]) {
             if (c && typeof c.asc_Save === "function") {
@@ -192,7 +194,7 @@ export class DocEditor implements DocEditorInterface {
         return null;
     }
 
-    private installSaveHook(config: any) {
+    private installSaveHook(config: DocEditorConfig) {
         const saveHandler = config?.events?.onSave;
         if (typeof saveHandler !== "function") return;
         const api = this.getApi();
@@ -215,7 +217,7 @@ export class DocEditor implements DocEditorInterface {
      * while alone with the document lock, otherwise 2 s after the last
      * change when single user, 10 min while co-editing).
      */
-    private applyAutosave(config: any) {
+    private applyAutosave(config: DocEditorConfig) {
         const gap = Number(config?.autosave);
         if (!Number.isFinite(gap)) return;
         const api = this.getApi();
@@ -343,7 +345,7 @@ export class DocEditor implements DocEditorInterface {
 type FromOO = any;
 type ToOO = any;
 
-interface DocEditorInterface {
+export interface DocEditorInterface {
     showMessage(...args: any[]): any;
     processSaveResult(...args: any[]): any;
     processRightsChange(...args: any[]): any;
@@ -373,11 +375,11 @@ interface DocEditorInterface {
     save(): void;
 }
 
-interface OrigDocEditorInterface extends DocEditorInterface {
+export interface OrigDocEditorInterface extends DocEditorInterface {
     cryptPadMessageToOO(msg: ToOO): void;
 }
 
-interface MockServer {
+export interface MockServer {
     getImageURL?: (name: string) => Promise<string>;
     onMessage: (msg: FromOO) => void;
     onCorruptionWarning?: (duplicateId: string) => void;
