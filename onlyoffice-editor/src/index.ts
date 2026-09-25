@@ -167,11 +167,20 @@ export class DocEditor implements DocEditorInterface {
     }
 
     /**
-     * The editor api instance living on the iframe window.
+     * The editor API instance living on the iframe window. Each editor
+     * build exposes it its own way: word and slide as `window.editor`, the
+     * cell build as `window.editorCell` (its `window.editor` can hold junk,
+     * see sdkjs/cell/view/DrawingObjectsController.js:46), pdf not at all.
+     * Pick the first candidate that actually is an api (i.e. has `asc_Save`).
      */
     private getApi(): any {
         const w = this.getIframe()?.contentWindow as any;
-        return w?.editor ?? w?.Asc?.editor ?? null;
+        for (const c of [w?.editor, w?.editorCell, w?.Asc?.editor]) {
+            if (c && typeof c.asc_Save === "function") {
+                return c;
+            }
+        }
+        return null;
     }
 
     private installSaveHook(config: any) {
@@ -192,28 +201,10 @@ export class DocEditor implements DocEditorInterface {
 
     /**
      * Apply `config.autosave` (seconds, 0 = no autosave) via
-     * `api.asc_setAutoSaveGap`. NB: the SDK uses the value only as an on/off
-     * flag — `apiBase._autoSave` tests `0 !== api.autoSaveGap` (pdf's
-     * `_autoSave` override adds `|| Is_Fast()`); it is never used as a
-     * duration. The real periods are hardcoded: `onDocumentContentReady`
-     * unconditionally starts a 40 ms `_autoSave` ticker which either
-     *
-     *   - saves immediately on every tick while a single user holds the
-     *     document lock (`canUnlockDocument`: the co-authoring protocol's
-     *     solo state, set by `_unlockDocument()` — no interval consulted at
-     *     all), or
-     *   - runs `_autoSaveInner` (only when the flag is on), which saves
-     *     `autoSaveGapFast` (2 s) after the last change for a single user
-     *     (`CollaborativeEditing.m_nUseType === 1`) and `autoSaveGapSlow`
-     *     (10 min) while co-editing (`m_nUseType <= 0`); a change younger
-     *     than `intervalWaitAutoSave` (1 s) postpones it, and in fast
-     *     co-editing it exchanges changes instead of saving
-     *     (`Continue_FastCollaborativeEditing`).
-     *
-     * `autosave: 0` disables the periodic autosave entirely while
-     * `canUnlockDocument` is false — as in this wrapper's local mode, where
-     * the editor is single-user from the start so nothing ever calls
-     * `_unlockDocument()`.
+     * `api.asc_setAutoSaveGap`. The SDK only tests the value against zero —
+     * the real periods are hardcoded in `apiBase._autoSave` (immediately
+     * while alone with the document lock, otherwise 2 s after the last
+     * change when single user, 10 min while co-editing).
      */
     private applyAutosave(config: any) {
         const gap = Number(config?.autosave);
@@ -225,34 +216,21 @@ export class DocEditor implements DocEditorInterface {
     }
 
     /**
-     * Serialise the current document to raw OnlyOffice `Editor.bin` bytes
-     * (`.bin`, "DOCY…") fully in-browser — the same serializer the api's
-     * `asc_nativeGetFile()` uses (`new BinaryFileWriter(doc).Write()`), with
-     * no server and no `/downloadas` round-trip. This mirrors Cryptpad's
-     * integration-mode `getContent()`. Word uses `AscCommonWord`, cell
-     * `AscCommonExcel`; other editors fall back to `asc_nativeGetFile()`
-     * (whose string form is decoded by `decodeNativeFileString`).
+     * Serialize the current document to `Editor.bin` bytes fully in-browser
+     * via the editor api's `asc_nativeGetFile()` (each editor build writes
+     * its own document model). Returns the UTF-8 bytes of the
+     * "<signature>;v<version>;<length>;<base64>" wire string
+     * ("DOCY"/"XLSY"/"PPTY" per build) — the exact form `loadBinary`
+     * accepts. Not available in the pdf editor build (it edits real PDF
+     * bytes).
      */
     private serializeBinary(): Uint8Array {
-        const w = this.getIframe()?.contentWindow as any;
         const api = this.getApi();
-        const doc = api?.WordControl?.m_oLogicDocument;
-        if (!doc) throw new Error("logic document not ready");
-        const BFW =
-            w?.AscCommonWord?.BinaryFileWriter ??
-            w?.AscCommonExcel?.BinaryFileWriter ??
-            w?.AscCommon?.BinaryFileWriter;
-        if (typeof BFW === "function") {
-            // Write(true) returns the raw bytes; Write() (no arg) returns a
-            // "DOCY;v<version>;<length>;<base64>" string.
-            const out = new BFW(doc).Write(true);
-            if (out && typeof out.byteLength === "number") return out;
-            if (typeof out === "string") return decodeNativeFileString(out);
-        }
         const native = api?.asc_nativeGetFile?.();
-        if (native && typeof native.byteLength === "number") return native;
-        if (typeof native === "string") return decodeNativeFileString(native);
-        throw new Error("could not serialise the document to Editor.bin");
+        if (!native) {
+            throw new Error("could not serialise the document to Editor.bin");
+        }
+        return new TextEncoder().encode(native);
     }
 
     serviceCommand(command: string, data: any) {
@@ -394,21 +372,6 @@ interface MockServer {
     getImageURL?: (name: string) => Promise<string>;
     onMessage: (msg: FromOO) => void;
     onCorruptionWarning?: (duplicateId: string) => void;
-}
-
-/**
- * Decode the `BinaryFileWriter.Write()` string form (i.e.
- * `"DOCY;v<version>;<byteLength>;<base64>"`) into raw `Editor.bin` bytes.
- * (Used as a fallback by `DocEditor.serializeBinary` for editors whose
- * `BinaryFileWriter` namespace the wrapper does not know about.)
- */
-function decodeNativeFileString(native: string): Uint8Array {
-    const parts = native.split(";");
-    const b64 = parts[parts.length - 1];
-    const bin = atob(b64);
-    const out = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-    return out;
 }
 
 async function loadAndPatchOOOrig() {
