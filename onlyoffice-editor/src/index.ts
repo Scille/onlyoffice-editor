@@ -3,7 +3,582 @@ import { deepAssign, noop, waitForEvent } from "./utils";
 
 let DocEditorOrig: any;
 
-export type DocEditorConfig = any;
+// ---------------------------------------------------------------------------
+// OnlyOffice protocol
+// ---------------------------------------------------------------------------
+
+/** A co-authoring participant, as carried by `auth`/`waitAuth`/`connectState`. */
+export interface OOParticipantEntry {
+    /** Composite `<idOriginal><indexUser>` id (the editor's own `_userId`). */
+    id: string;
+    /** Integrator-provided user id. */
+    idOriginal: string;
+    /** Display name. */
+    username: string;
+    /** Participant index (order of arrival). */
+    indexUser: number;
+    /** Read-only viewer. */
+    view: boolean;
+    /** Underlying connection id (= sessionId). */
+    connectionId?: string;
+    isCloseCoAuthoring?: boolean;
+    isLiveViewer?: boolean;
+    encrypted?: boolean;
+}
+
+/** A chat/comment message entry (server `message`/`auth` events). */
+export interface OOMessageEntry {
+    docid: string;
+    message: string;
+    time: number;
+    user: string;
+    useridoriginal: string;
+    username: string;
+}
+
+/**
+ * An element-lock block descriptor: a plain guid string (word) or an object
+ * with a `guid` (cell/slide/pdf).
+ */
+export interface OOBlockDescriptor {
+    guid?: string;
+    time?: number;
+    [key: string]: unknown;
+}
+
+/** An element lock granted to a user (server `getLock`/`auth` events). */
+export interface OOLockEntry {
+    /** Composite user id of the lock holder. */
+    user: string;
+    time: number;
+    /** The block descriptor the lock was requested for. */
+    block: unknown;
+}
+
+/** A serialized change entry (server `authChanges`/`saveChanges` events). */
+export interface OOChangeEntry {
+    docid: string;
+    /** JSON-encoded opaque op fragment. */
+    change: string;
+    time: number;
+    user: string;
+    useridoriginal: string;
+}
+
+/** A lock released with a `saveChanges`/`releaseLock` event. */
+export interface OOSavedLockEntry {
+    block: unknown;
+    user: string;
+    time: number;
+    changes: unknown;
+}
+
+/** Connection limits/behaviour knobs carried by the server `auth` event. */
+export interface OOServerAuthSettings {
+    spellcheckerUrl?: string;
+    reconnection?: { attempts: number; delay: number };
+    /** Binary (non-JSON) `saveChanges` encoding. */
+    binaryChanges?: boolean;
+    websocketMaxPayloadSize?: number;
+    maxChangesSize?: number;
+    limits_image_size?: number;
+    limits_image_types_upload?: string;
+}
+
+// --- Client events (editor -> server) ------------------------------------
+
+/** Editor auth handshake; the "server" must answer with a `ToOO` `auth`. */
+export interface OOClientEventAuth {
+    type: "auth";
+    docid: string;
+    token: string;
+    user: {
+        id: string;
+        username: string;
+        firstname: string | null;
+        lastname: string | null;
+        indexUser: number;
+    };
+    editorType: number;
+    lastOtherSaveTime: number;
+    block: unknown[];
+    sessionId: string | null;
+    sessionTimeConnect: number | null;
+    sessionTimeIdle: number;
+    documentFormatSave: number;
+    isCloseCoAuthoring: boolean;
+    openCmd: Record<string, unknown> | null;
+    lang: string;
+    mode: string;
+    permissions: { edit: boolean; review: boolean };
+    encrypted: boolean;
+    IsAnonymousUser: boolean;
+    timezoneOffset: number;
+    headingsColor: string | null;
+    coEditingMode: string;
+    jwtOpen: string;
+    jwtSession?: string;
+    time: number;
+    supportAuthChangesAck: boolean;
+}
+
+/** A chat/comment message broadcast to the co-editors. */
+export interface OOClientEventMessage {
+    type: "message";
+    message: string;
+}
+
+/** A cursor position broadcast (opaque OnlyOffice-internal string). */
+export interface OOClientEventCursor {
+    type: "cursor";
+    cursor: string;
+}
+
+/** Element-lock request (cell ranges, slide objects, ...). */
+export interface OOClientEventGetLock {
+    type: "getLock";
+    block: (OOBlockDescriptor | string)[];
+}
+
+/** Save-lock request. */
+export interface OOClientEventIsSaveLock {
+    type: "isSaveLock";
+    syncChangesIndex: number;
+}
+
+/** A chunk of serialized document changes to persist. */
+export interface OOClientEventSaveChanges {
+    type: "saveChanges";
+    /**
+     * JSON-encoded string of op fragments (default mode) or a real array
+     * (binary-changes mode).
+     */
+    changes: string | unknown[];
+    startSaveChanges: boolean;
+    endSaveChanges: boolean;
+    isCoAuthoring?: boolean;
+    isExcel?: boolean;
+    deleteIndex?: number | null;
+    excelAdditionalInfo?: string | null;
+    unlock?: boolean;
+    releaseLocks?: boolean;
+    reSave?: number;
+}
+
+/** Save-lock release (cancellation of an in-progress save). */
+export interface OOClientEventUnSaveLock {
+    type: "unSaveLock";
+}
+
+/** Document unlock (end of an exclusive editing session). */
+export interface OOClientEventUnLockDocument {
+    type: "unLockDocument";
+    isSave: boolean;
+    unlock: boolean;
+    deleteIndex?: number | null;
+    releaseLocks?: boolean;
+}
+
+/** Connection close. */
+export interface OOClientEventClose {
+    type: "close";
+}
+
+/** Ack of the server `authChanges` event. */
+export interface OOClientEventAuthChangesAck {
+    type: "authChangesAck";
+}
+
+/** Request the missed chat/comment messages. */
+export interface OOClientEventGetMessages {
+    type: "getMessages";
+}
+
+/** Ask the "server" to open the document (unused offline: `loadBinary`). */
+export interface OOClientEventOpenDocument {
+    type: "openDocument";
+    message: Record<string, unknown>;
+}
+
+/** Client-side log entry. */
+export interface OOClientEventClientLog {
+    type: "clientLog";
+    level: string;
+    msg: string;
+}
+
+/** Session keep-alive. */
+export interface OOClientEventExtendSession {
+    type: "extendSession";
+    idletime: number;
+}
+
+/** A force save has started. */
+export interface OOClientEventForceSaveStart {
+    type: "forceSaveStart";
+}
+
+/** RPC roundtrip initiated by the editor. */
+export interface OOClientEventRpc {
+    type: "rpc";
+    responseKey: number;
+    data: Record<string, unknown>;
+}
+
+/**
+ * Editics addition (no vanilla OO counterpart): a save has been persisted
+ * up to the given change index / new version.
+ */
+export interface OOClientEventSaveDone {
+    type: "saveDone";
+    savedUpToIndex: number;
+    newVersion: number;
+}
+
+export type OOClientEvent =
+    | OOClientEventAuth
+    | OOClientEventMessage
+    | OOClientEventCursor
+    | OOClientEventGetLock
+    | OOClientEventIsSaveLock
+    | OOClientEventSaveChanges
+    | OOClientEventUnSaveLock
+    | OOClientEventUnLockDocument
+    | OOClientEventClose
+    | OOClientEventAuthChangesAck
+    | OOClientEventGetMessages
+    | OOClientEventOpenDocument
+    | OOClientEventClientLog
+    | OOClientEventExtendSession
+    | OOClientEventForceSaveStart
+    | OOClientEventRpc
+    | OOClientEventSaveDone;
+
+// --- Server events (server -> editor) -------------------------------------
+
+/** Positive reply to the editor `auth` handshake. */
+export interface OOServerEventAuth {
+    type: "auth";
+    /** 1 = success. */
+    result: number;
+    sessionId: string;
+    sessionTimeConnect?: number;
+    participants: OOParticipantEntry[];
+    messages?: OOMessageEntry[];
+    /** The fork's own replies send `[]` (no locks at all). */
+    locks?: Record<string, OOLockEntry> | unknown[];
+    indexUser: number;
+    hasForgotten?: boolean;
+    jwt?: string;
+    g_cAscSpellCheckUrl?: string;
+    buildVersion?: string;
+    buildNumber?: number;
+    licenseType?: number;
+    settings?: OOServerAuthSettings;
+    openedAt?: number;
+    /** Integrator-specific extra fields travel along. */
+    [key: string]: unknown;
+}
+
+/** The auth lock is held by an established editor; wait for its release. */
+export interface OOServerEventWaitAuth {
+    type: "waitAuth";
+    lockDocument: OOParticipantEntry;
+}
+
+/** The participant list changed. */
+export interface OOServerEventConnectState {
+    type: "connectState";
+    participantsTimestamp: number;
+    participants: OOParticipantEntry[];
+    waitAuth: boolean;
+}
+
+/** Changes missed while the editor was away. */
+export interface OOServerEventAuthChanges {
+    type: "authChanges";
+    changes: OOChangeEntry[];
+}
+
+/** Chat/comment messages. */
+export interface OOServerEventMessage {
+    type: "message";
+    messages?: Partial<OOMessageEntry>[];
+}
+
+/** Cursor positions of the other participants. */
+export interface OOServerEventCursor {
+    type: "cursor";
+    messages: {
+        cursor: string;
+        time: number;
+        user: string;
+        useridoriginal: string;
+    }[];
+}
+
+/** Element-lock grants (reply to the editor's `getLock` request). */
+export interface OOServerEventGetLock {
+    type: "getLock";
+    locks: Record<string, OOLockEntry>;
+}
+
+/** Element-locks released. */
+export interface OOServerEventReleaseLock {
+    type: "releaseLock";
+    locks: OOSavedLockEntry[];
+}
+
+/** A chunk of persisted changes (drives the editor's save state machine). */
+export interface OOServerEventSaveChanges {
+    type: "saveChanges";
+    changes: OOChangeEntry[] | null;
+    changesIndex: number;
+    syncChangesIndex: number;
+    endSaveChanges: boolean;
+    locks?: OOSavedLockEntry[];
+    excelAdditionalInfo?: string;
+}
+
+/** Ack of an intermediate `saveChanges` chunk. */
+export interface OOServerEventSavePartChanges {
+    type: "savePartChanges";
+    changesIndex: number;
+    syncChangesIndex: number;
+}
+
+/** Save-lock reply (`false` grants the lock). */
+export interface OOServerEventSaveLock {
+    type: "saveLock";
+    saveLock: boolean;
+}
+
+/** Save finished (carries the new save point). */
+export interface OOServerEventUnSaveLock {
+    type: "unSaveLock";
+    index: number;
+    time: number;
+    syncChangesIndex: number;
+}
+
+/** Hard disconnect. */
+export interface OOServerEventDrop {
+    type: "drop";
+    code: number;
+    description: string;
+}
+
+/** Recoverable protocol error. */
+export interface OOServerEventWarning {
+    type: "warning";
+    code: number;
+    message: string;
+}
+
+/**
+ * License injection, read by the editor's `DocsCoApi._onLicense` — without it
+ * the editor idles in WaitAuth and never opens. (Missing from protocol.js's
+ * `OOServerEvent` list by mistake.)
+ */
+export interface OOServerEventLicense {
+    type: "license";
+    license: {
+        /** e.g. 3 = open source. */
+        type: number;
+        mode: number;
+        rights: number;
+        buildVersion: string;
+        buildNumber: number;
+    };
+}
+
+export type OOServerEvent =
+    | OOServerEventAuth
+    | OOServerEventWaitAuth
+    | OOServerEventConnectState
+    | OOServerEventAuthChanges
+    | OOServerEventMessage
+    | OOServerEventCursor
+    | OOServerEventGetLock
+    | OOServerEventReleaseLock
+    | OOServerEventSaveChanges
+    | OOServerEventSavePartChanges
+    | OOServerEventSaveLock
+    | OOServerEventUnSaveLock
+    | OOServerEventDrop
+    | OOServerEventWarning
+    | OOServerEventLicense;
+
+// ---------------------------------------------------------------------------
+// Editor configuration
+// ---------------------------------------------------------------------------
+// The vanilla OnlyOffice editor config (see https://api.onlyoffice.com/editors/config/)
+// plus the fork's additions.
+// Any field not declared below passes through to the original editor unchanged.
+
+/** Document permissions (see https://api.onlyoffice.com/editors/config/document/permissions). */
+export interface DocEditorPermissions {
+    edit?: boolean;
+    download?: boolean;
+    print?: boolean;
+    copy?: boolean;
+    comment?: boolean;
+    review?: boolean;
+    fillForms?: boolean;
+    modifyFilter?: boolean;
+    modifyContentControl?: boolean;
+    chat?: boolean;
+    [key: string]: unknown;
+}
+
+/** The `document` section of the editor config. */
+export interface DocEditorConfigDocument {
+    /** Document id (unique per content; unused in offline mode). */
+    key?: string;
+    title?: string;
+    /**
+     * Placeholder URL: never fetched in offline mode, but the vanilla
+     * `_checkConfigParams` rejects an empty one.
+     */
+    url?: string;
+    permissions?: DocEditorPermissions;
+    [key: string]: unknown;
+}
+
+/** The `customization` section of `editorConfig`. */
+export interface DocEditorCustomization {
+    compactHeader?: boolean;
+    /** e.g. "theme-classic-light" / "theme-dark". */
+    uiTheme?: string;
+    chat?: boolean;
+    comments?: boolean;
+    help?: boolean;
+    about?: boolean;
+    feedback?: boolean;
+    anonymous?: { request: boolean };
+    [key: string]: unknown;
+}
+
+/** The `editorConfig` section of the editor config. */
+export interface DocEditorConfigEditorConfig {
+    mode?: "edit" | "view";
+    lang?: string;
+    user?: { id?: string; name?: string };
+    customization?: DocEditorCustomization;
+    [key: string]: unknown;
+}
+
+/**
+ * Event callbacks of the editor config. `onSave`, `onPrintPdf` and
+ * `onDownloadAs` are fork-level hooks; the rest are vanilla OnlyOffice
+ * events passed to the editor.
+ */
+export interface DocEditorEvents {
+    /** The editor app booted (`waitForAppReady` resolves). */
+    onAppReady?: () => void;
+    /** The document is open and editable (`waitForDocumentReady` resolves). */
+    onDocumentReady?: () => void;
+    /**
+     * Called inside the wrapped `api.asc_Save` with the serialized
+     * `Editor.bin` bytes (UTF-8 of the
+     * "<signature>;v<version>;<length>;<base64>" wire string); a rejected
+     * promise fails the save.
+     */
+    onSave?: (data: Uint8Array) => void | Promise<void>;
+    /** Print bridge, wired onto `window.APP.printPdf`. */
+    onPrintPdf?: (
+        dataContainer: unknown,
+        callback: (result: unknown) => void,
+    ) => void;
+    /** Download-as bridge, wired onto `window.APP.downloadAs`. */
+    onDownloadAs?: (
+        dataContainer: unknown,
+        callback: (result: unknown) => void,
+    ) => void;
+    onError?: (event: { data?: unknown }) => void;
+    [key: string]: unknown;
+}
+
+/** The editor config accepted by `docEditor.init()`. */
+export interface DocEditorConfig {
+    /** Fork addition: local mode, no DocumentServer (see `MockServer`). */
+    offline?: boolean;
+    /**
+     * Fork addition: autosave gap in seconds; 0 disables the SDK's periodic
+     * autosave (the value is only tested against zero).
+     */
+    autosave?: number;
+    width?: string | number;
+    height?: string | number;
+    documentType?: "word" | "cell" | "slide" | "pdf";
+    document?: DocEditorConfigDocument;
+    editorConfig?: DocEditorConfigEditorConfig;
+    events?: DocEditorEvents;
+    [key: string]: unknown;
+}
+
+// ---------------------------------------------------------------------------
+// The editor API object living in the iframe
+// ---------------------------------------------------------------------------
+
+/**
+ * The editor api instance living on the editor iframe window, returned by
+ * `docEditor.getApi()`.
+ * The surface is huge and build-dependent, so only what this wrapper and its
+ * hosts rely on is declared.
+ */
+export interface OOApi {
+    isDocumentModified: () => boolean;
+    asc_Save: (...args: unknown[]) => boolean;
+    /** Autosave gap in seconds (only used as an on/off flag in practice). */
+    asc_setAutoSaveGap: (gap: number) => void;
+    /**
+     * Serialize the document to the `Editor.bin` wire string (not available
+     * in the pdf editor build).
+     */
+    asc_nativeGetFile: () => string | undefined;
+    attachEvent: (name: string, callback: (...args: unknown[]) => void) => void;
+    [key: string]: unknown;
+}
+
+// ---------------------------------------------------------------------------
+// Host page globals
+// ---------------------------------------------------------------------------
+
+/**
+ * The host hooks the fork's sdkjs reads off `window.APP` instead of
+ * POSTing to a converter/print endpoint (CryptPad heritage: further hooks
+ * are read from there too, e.g. the editor theme change hook in
+ * sdkjs/slide/api.js).
+ */
+export interface OOHostHooks {
+    /** Wired from `config.events.onPrintPdf`. */
+    printPdf?: (
+        dataContainer: unknown,
+        callback: (result: unknown) => void,
+    ) => void;
+    /** Wired from `config.events.onDownloadAs`. */
+    downloadAs?: (
+        dataContainer: unknown,
+        callback: (result: unknown) => void,
+    ) => void;
+    /** Wired from `MockServer.getImageURL`. */
+    getImageURL?: (name: string, callback: (url: string) => void) => void;
+    [key: string]: unknown;
+}
+
+/** Globals installed on the host page window (by the wrapper or host page). */
+declare global {
+    interface Window {
+        /** The patched OnlyOffice API entry point (see `loadAndPatchOOOrig`). */
+        DocsAPI: { DocEditor: new (placeholderId: string) => DocEditor };
+        APP?: OOHostHooks;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// End of the typing stuff
+// ---------------------------------------------------------------------------
 
 /**
  * How to start the `DocEditor`:
@@ -184,7 +759,7 @@ export class DocEditor implements DocEditorInterface {
      * see sdkjs/cell/view/DrawingObjectsController.js:46), pdf not at all.
      * Pick the first candidate that actually is an api (i.e. has `asc_Save`).
      */
-    private getApi(): OOApi | null {
+    getApi(): OOApi | null {
         const w = this.getIframe()?.contentWindow as any;
         for (const c of [w?.editor, w?.editorCell, w?.Asc?.editor]) {
             if (c && typeof c.asc_Save === "function") {
@@ -342,8 +917,8 @@ export class DocEditor implements DocEditorInterface {
     }
 }
 
-type FromOO = any;
-type ToOO = any;
+type FromOO = OOClientEvent;
+type ToOO = OOServerEvent;
 
 export interface DocEditorInterface {
     showMessage(...args: any[]): any;
@@ -376,12 +951,12 @@ export interface DocEditorInterface {
 }
 
 export interface OrigDocEditorInterface extends DocEditorInterface {
-    cryptPadMessageToOO(msg: ToOO): void;
+    cryptPadMessageToOO(msg: OOServerEvent): void;
 }
 
 export interface MockServer {
     getImageURL?: (name: string) => Promise<string>;
-    onMessage: (msg: FromOO) => void;
+    onMessage: (msg: OOClientEvent) => void;
     onCorruptionWarning?: (duplicateId: string) => void;
 }
 
