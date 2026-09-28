@@ -468,15 +468,8 @@ export interface DocEditorConfigEditorConfig {
     [key: string]: unknown;
 }
 
-/**
- * Event callbacks of the editor config. `onSave`, `onPrintPdf` and
- * `onDownloadAs` are fork-level hooks; the rest are vanilla OnlyOffice
- * events passed to the editor.
- */
 export interface DocEditorEvents {
-    /** The editor app booted (`waitForAppReady` resolves). */
     onAppReady?: () => void;
-    /** The document is open and editable (`waitForDocumentReady` resolves). */
     onDocumentReady?: () => void;
     /**
      * Called inside the wrapped `api.asc_Save` with the serialized
@@ -485,16 +478,6 @@ export interface DocEditorEvents {
      * promise fails the save.
      */
     onSave?: (data: Uint8Array) => void | Promise<void>;
-    /** Print bridge, wired onto `window.APP.printPdf`. */
-    onPrintPdf?: (
-        dataContainer: unknown,
-        callback: (result: unknown) => void,
-    ) => void;
-    /** Download-as bridge, wired onto `window.APP.downloadAs`. */
-    onDownloadAs?: (
-        dataContainer: unknown,
-        callback: (result: unknown) => void,
-    ) => void;
     onError?: (event: { data?: unknown }) => void;
     [key: string]: unknown;
 }
@@ -546,24 +529,146 @@ export interface OOApi {
 // ---------------------------------------------------------------------------
 
 /**
- * The host hooks the fork's sdkjs reads off `window.APP` instead of
- * POSTing to a converter/print endpoint (CryptPad heritage: further hooks
- * are read from there too, e.g. the editor theme change hook in
- * sdkjs/slide/api.js).
+ * An RGBA color, as returned by `OOHostHooks.getUserColor`
+ * (CryptPad's `CPColor` / the editor's `CColor`).
+ */
+export interface OOHostColor {
+    /** 0-255. */
+    r: number;
+    /** 0-255. */
+    g: number;
+    /** 0-255. */
+    b: number;
+    /** 0-255; used by the editor's `CColor` constructor. */
+    a: number;
+}
+
+/**
+ * The descriptor handed to `OOHostHooks.printPdf`/`downloadAs` by the
+ * editor's `apiBase.sync_StartAction`-adjacent download pipeline.
+ */
+export interface OOHostDataContainer {
+    /** The in-browser-serialized document bytes (e.g. the PDF to print). */
+    data: unknown;
+    [key: string]: unknown;
+}
+
+/**
+ * Cryptpad changes on OnlyOffice often rely on a `window.APP` object to
+ * store its hooks. However this `window.APP` was never defined in this
+ * codebase (and instead was set in CryptPad code :/).
+ * see:
+ * - sdkjs/slide/api.js:7320 (hook on editor theme change)
+ * - https://github.com/cryptpad/cryptpad/blob/9808cf25c1091d6cf532df13bf5a70ba332f8d4d/www/common/onlyoffice/inner.js#L65)
+ *
+ * Every hook is optional: each sdkjs call site feature-tests
+ * `window.parent.APP.<hook>` and falls back to the vanilla OnlyOffice
+ * behaviour (or no-ops) when it is absent.
  */
 export interface OOHostHooks {
-    /** Wired from `config.events.onPrintPdf`. */
+    /**
+     * Print bridge, called by `apiBase` instead of POSTing the PDF to the
+     * converter (sdkjs/common/apiBase.js:2658). Only consulted for PDF
+     * prints (`options.isPdfPrint`); the callback should be called with
+     * `null` (ends the editor's blocking action cleanly) or a server-like
+     * `{ status: 'ok', data: url, ... }` object which is then fed back into
+     * the editor's print pipeline.
+     */
     printPdf?: (
-        dataContainer: unknown,
-        callback: (result: unknown) => void,
+        dataContainer: OOHostDataContainer,
+        callback: (result: { status: string; data?: string } | null) => void,
     ) => void;
-    /** Wired from `config.events.onDownloadAs`. */
+
+    /**
+     * Download-as bridge, called by `apiBase` instead of POSTing to
+     * `/downloadas` (sdkjs/common/apiBase.js:2669). Same callback contract as
+     * `printPdf` (`null` to end the action, or the server-like result whose
+     * URL is downloaded).
+     */
     downloadAs?: (
-        dataContainer: unknown,
-        callback: (result: unknown) => void,
+        dataContainer: OOHostDataContainer,
+        callback: (result: { status: string; data?: string } | null) => void,
     ) => void;
-    /** Wired from `MockServer.getImageURL`. */
+
+    /**
+     * Resolve a document image source to a fetchable URL. Called by the
+     * image loader when the src looks like a CryptPad media tag
+     * ("#channel=...", sdkjs/common/GlobalLoaders.js:639); the callback must
+     * receive the blob URL to load, or `""` to fall back to the original src.
+     */
     getImageURL?: (name: string, callback: (url: string) => void) => void;
+
+    /**
+     * Image-insertion dialog bridge (sdkjs/common/apiBase.js:2804): replaces
+     * the editor's upload dialog. The success callback receives an image
+     * descriptor whose `url` is added to the document; the error callback is
+     * invoked on cancel/failure (raising a non-critical `asc_onError`).
+     */
+    AddImage?: (
+        callback: (res: { url: string; [key: string]: unknown }) => void,
+        errorCallback: () => void,
+    ) => void;
+
+    /**
+     * Image-file upload bridge (sdkjs/common/editorscommon.js:2496): replaces
+     * the POST to the converter's upload endpoint. The callback receives an
+     * error id (`0`/`c_oAscError.ID.No` on success) and the resulting image
+     * urls.
+     */
+    UploadImageFiles?: (
+        files: File[],
+        documentId: string,
+        documentUserId: string,
+        jwt: string,
+        callback: (err: number | null, urls: string[]) => void,
+    ) => void;
+
+    /**
+     * Per-user color override for co-authoring cursors/highlights
+     * (sdkjs/common/editorscommon.js:11133). Return the host color for
+     * `userId`, or a falsy value to let the editor pick its own deterministic
+     * color. Exceptions from the hook are swallowed by the editor.
+     */
+    getUserColor?: (userId: string) => OOHostColor | null | undefined;
+
+    /**
+     * Slides only: the user changed the presentation theme locally
+     * (sdkjs/slide/api.js:7320); the host typically persists the theme on the
+     * pad and replicates it to co-authors as a `cp_theme` change.
+     * Not called for remote/selected-slide changes.
+     */
+    changeTheme?: (indexTheme: number) => void;
+
+    /**
+     * Slides only: a `cp_theme` change arrived from a co-author
+     * (sdkjs/common/CollaborativeEditingBase.js:69); the host must re-apply
+     * the (remotely updated) theme before the editor applies it itself.
+     */
+    remoteTheme?: () => void;
+
+    /**
+     * Spreadsheets only: the fast-collaborative mode was toggled via
+     * `asc_SetFastCollaborative` (sdkjs/cell/api.js:1779); lets the host
+     * track/replicate the setting.
+     */
+    onFastChange?: (bFast: boolean) => void;
+
+    /**
+     * Url query args (as a string) appended by the editor to popup urls: the
+     * slide reporter window (`index.reporter.html`, sdkjs/slide/api.js:7612)
+     * and the index.html links of the outer api script
+     * (web-apps/apps/api/documents/api.js:1192). Carries e.g. the pad app
+     * route args of the host.
+     */
+    urlArgs?: string;
+
+    /**
+     * Open a hyperlink from the embed viewer (web-apps/apps/common/embed/lib/
+     * util/utils.js:134); replaces the viewer's own `window.open` (typically
+     * routed by the host to its own navigation). Only read in embed builds.
+     */
+    openURL?: (url: string) => void;
+
     [key: string]: unknown;
 }
 
@@ -572,6 +677,7 @@ declare global {
     interface Window {
         /** The patched OnlyOffice API entry point (see `loadAndPatchOOOrig`). */
         DocsAPI: { DocEditor: new (placeholderId: string) => DocEditor };
+        /** Hooks introduced by Cryptpad's fork */
         APP?: OOHostHooks;
     }
 }
@@ -583,9 +689,12 @@ declare global {
 /**
  * How to start the `DocEditor`:
  * ```
- * const docEditor = new DocsAPI.DocEditor("placeholder");
+ * // 1. Create & initialize the editor
+ * const docEditor = new window.DocsAPI.DocEditor("placeholder");
  * const mockServer = ...;
+ * window.APP = { getImageURL: ..., AddImage: ... , ...}
  * await docEditor.init(config, mockServer);
+ * // 2. Load the document and start the actual edition
  * docEditor.sendMessageToOO(
  *     {
  *         type: 'license',
@@ -631,8 +740,6 @@ export class DocEditor implements DocEditorInterface {
         let onDocumentReady;
 
         this.offline = !!config?.offline;
-
-        this.installHostHooks(config);
 
         this.waitForAppReady = new Promise((resolve) => {
             onAppReady = resolve;
@@ -692,7 +799,18 @@ export class DocEditor implements DocEditorInterface {
         // Connect the co-authoring mock server. Nothing flows over the bridge
         // before the host pushes the license (`sendMessageToOO`), so no
         // message is missed by connecting here.
-        this.connectMockServer(server);
+
+        this.server = server;
+
+        this.fromOOHandle = this.fromOOHandler.addHandler((msg) => {
+            this.server.onMessage(msg);
+        });
+
+        if (server.onCorruptionWarning) {
+            this.corruptionWarningHandler.addHandler(
+                server.onCorruptionWarning,
+            );
+        }
     }
 
     destroyEditor() {
@@ -713,43 +831,6 @@ export class DocEditor implements DocEditorInterface {
 
     sendMessageToOO(msg: ToOO) {
         this.toOOHandler.fire(msg);
-    }
-
-    private installHostHooks(config: DocEditorConfig) {
-        const w = window as any;
-        const events: DocEditorEvents = config?.events ?? {};
-        const endAction = (dataContainer: any, cb: (obj?: any) => void) =>
-            cb(null);
-        if (events.onPrintPdf || this.offline) {
-            w.APP.printPdf = events.onPrintPdf ?? endAction;
-        }
-        if (events.onDownloadAs || this.offline) {
-            w.APP.downloadAs = events.onDownloadAs ?? endAction;
-        }
-    }
-
-    private connectMockServer(server: MockServer) {
-        this.server = server;
-
-        const w = window as any;
-        w.APP.getImageURL = server.getImageURL
-            ? (name: string, callback: (url: string) => void) => {
-                  server
-                      .getImageURL(name)
-                      .then(callback)
-                      .catch((e) => console.error(e));
-              }
-            : (name: string, callback: (url: string) => void) => callback("");
-
-        this.fromOOHandle = this.fromOOHandler.addHandler((msg) => {
-            this.server.onMessage(msg);
-        });
-
-        if (server.onCorruptionWarning) {
-            this.corruptionWarningHandler.addHandler(
-                server.onCorruptionWarning,
-            );
-        }
     }
 
     /**
@@ -955,7 +1036,6 @@ export interface OrigDocEditorInterface extends DocEditorInterface {
 }
 
 export interface MockServer {
-    getImageURL?: (name: string) => Promise<string>;
     onMessage: (msg: OOClientEvent) => void;
     onCorruptionWarning?: (duplicateId: string) => void;
 }
