@@ -194,10 +194,94 @@ export interface OOClientEventGetMessages {
     type: "getMessages";
 }
 
-/** Ask the "server" to open the document (unused offline: `loadBinary`). */
+/**
+ * The `message` payload of the editor's `openDocument` request. Dispatched on
+ * `c` by the "server" (DocumentServer's `DocService.openDocument` switch) and
+ * answered with an `OOServerEventDocumentOpen` whose inner `data.type` echoes
+ * `c`.
+ */
+export type OOClientOpenDocumentMessage =
+    | OOClientOpenDocumentMessageReopen
+    | OOClientOpenDocumentMessageSetPassword
+    | OOClientOpenDocumentMessageChangeDocInfo
+    | OOClientOpenDocumentMessageImgUrls
+    | OOClientOpenDocumentMessagePathUrl
+    | OOClientOpenDocumentMessagePathUrls;
+
+/**
+ * Re-open the document with advanced open options (TXT codepage, CSV
+ * delimiter, or a DRM password) after a `needparams`/`needpassword`
+ * `documentOpen` reply (sdkjs `asc_setAdvancedOptions`).
+ */
+export interface OOClientOpenDocumentMessageReopen {
+    c: "reopen";
+    id: string;
+    userid?: string;
+    /** Document format (file extension, e.g. "txt", "csv"). */
+    format: string;
+    title: string;
+    lcid: number;
+    nobase64: boolean;
+    /** CSV: codepage id. */
+    codepage?: number;
+    /** CSV: delimiter code. */
+    delimiter?: number;
+    /** CSV: custom delimiter character. */
+    delimiterChar?: string;
+    /** DRM: the document password to reopen with. */
+    password?: string;
+}
+
+/** Set, change or remove (empty string) the document password. */
+export interface OOClientOpenDocumentMessageSetPassword {
+    c: "setpassword";
+    id: string;
+    /** Empty string removes the password. */
+    password: string;
+}
+
+/** Change the user's display name in the document info. */
+export interface OOClientOpenDocumentMessageChangeDocInfo {
+    c: "changedocinfo";
+    id: string;
+    username: string;
+}
+
+/** Resolve image sources (e.g. CryptPad media tags) to fetchable urls. */
+export interface OOClientOpenDocumentMessageImgUrls {
+    c: "imgurls";
+    id: string;
+    userid?: string;
+    saveindex?: number;
+    /** Download token (wopi-style integrations). */
+    tokenDownload?: string;
+    /** Image urls to resolve. */
+    data: string[];
+}
+
+/** Resolve a stored document path to a download url. */
+export interface OOClientOpenDocumentMessagePathUrl {
+    c: "pathurl";
+    /** Title for the produced download (Content-Disposition). */
+    title: string;
+    /** Storage-relative path to resolve (e.g. "origin.docx"). */
+    data: string;
+}
+
+/**
+ * Resolve several stored paths to download urls.
+ * (Upstream quirk: this one is sent with a `type` field instead of `c`.)
+ */
+export interface OOClientOpenDocumentMessagePathUrls {
+    c: "pathurls";
+    /** Storage-relative paths to resolve. */
+    data: string[];
+}
+
+/** Ask the "server" to open the document or to fetch an image/document URL. */
 export interface OOClientEventOpenDocument {
     type: "openDocument";
-    message: Record<string, unknown>;
+    message: OOClientOpenDocumentMessage;
 }
 
 /** Client-side log entry. */
@@ -392,6 +476,68 @@ export interface OOServerEventLicense {
     };
 }
 
+/** Status of an `OOServerEventDocumentOpen` reply (DocumentServer `OutputData`). */
+export type OODocumentOpenStatus =
+    /** Success; the meaning of `data` depends on `type`. */
+    | "ok"
+    /** Failure; `data` is an OnlyOffice server error code (stringified int). */
+    | "err"
+    /** The document changed server-side since this session opened it. */
+    | "updateversion"
+    /** Advanced open options needed (TXT codepage / CSV delimiter). */
+    | "needparams"
+    /** Document password needed (or the provided one was wrong). */
+    | "needpassword";
+
+/**
+ * Inner payload of a `documentOpen` reply (DocumentServer `OutputData`).
+ * Dispatches on `type` (which echoes the `c` of the answered
+ * `openDocument` request, "open" for the initial open sent as the
+ * `auth`'s `openCmd`) and then on `status`.
+ */
+export interface OODocumentOpenResult {
+    type:
+        | "open"
+        | "reopen"
+        | "setpassword"
+        | "changedocinfo"
+        | "imgurls"
+        | "pathurl"
+        | "pathurls";
+    status: OODocumentOpenStatus;
+    /**
+     * Status- and type-dependent payload:
+     * - `open`/`reopen` + `ok`/`updateversion`: map of file name to signed
+     *   url (`{"Editor.bin": ...}`, `{"origin.<format>": ...}`) the editor
+     *   downloads to bootstrap the document;
+     * - `err`: OnlyOffice error code;
+     * - `needparams`: url of the origin file to pick settings from,
+     *   `needpassword`: error code;
+     * - `imgurls` + `ok`: `{ error: number, urls: { url: string; path: string }[] }`;
+     * - `pathurl` + `ok`: signed download url (see `filetype`);
+     * - `pathurls` + `ok`: array of signed download urls;
+     * - `setpassword`/`changedocinfo` + `ok`: absent.
+     */
+    data?: unknown;
+    /** Save point timestamp, forwarded to the editor's `setOpenedAt`. */
+    openedAt?: number;
+    /** Extension (without dot) of the produced file (`pathurl` only). */
+    filetype?: string;
+}
+
+/**
+ * Reply to the editor's `openDocument` request (and to the initial `open`
+ * carried by the `auth` handshake's `openCmd`). Read by the editor's
+ * `DocsCoApi._documentOpen` → `CoAuthoringApi.onDocumentOpen`
+ * (sdkjs/common/apiBase.js:2177): `open`/`reopen` drive the document
+ * bootstrap, any other `type` is routed to the `sendCommand` callback
+ * registered for the matching request.
+ */
+export interface OOServerEventDocumentOpen {
+    type: "documentOpen";
+    data: OODocumentOpenResult;
+}
+
 export type OOServerEvent =
     | OOServerEventAuth
     | OOServerEventWaitAuth
@@ -407,7 +553,8 @@ export type OOServerEvent =
     | OOServerEventUnSaveLock
     | OOServerEventDrop
     | OOServerEventWarning
-    | OOServerEventLicense;
+    | OOServerEventLicense
+    | OOServerEventDocumentOpen;
 
 // ---------------------------------------------------------------------------
 // Editor configuration
