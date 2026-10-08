@@ -2808,7 +2808,7 @@
 			// This method activats the image
 			t._addImageUrl([res.url], obj);
 			// t.sync_EndAction(c_oAscAsyncActionType.BlockInteraction, c_oAscAsyncAction.UploadImage);
-		}, function() {
+		}, function(error) {
 			// t.sync_EndAction(c_oAscAsyncActionType.BlockInteraction, c_oAscAsyncAction.UploadImage);
 			t.sendEvent("asc_onError", error, c_oAscError.Level.NoCritical);
 		});
