@@ -58,8 +58,13 @@ export interface OOLockEntry {
 /** A serialized change entry (server `authChanges`/`saveChanges` events). */
 export interface OOChangeEntry {
     docid: string;
-    /** JSON-encoded opaque op fragment. */
-    change: string;
+    /**
+     * A single serialized op change, in one of two encodings:
+     * - default: a length-prefixed base64 string (i.e. `"<len>;<base64>"`).
+     * - when the server `auth` advertised `settings.binaryChanges`: the raw
+     *   change bytes.
+     */
+    change: string | Uint8Array;
     time: number;
     user: string;
     useridoriginal: string;
@@ -91,12 +96,14 @@ export interface OOServerAuthSettings {
 export interface OOClientEventAuth {
     type: "auth";
     docid: string;
+    /** Editor stub token (the fork hardcodes `'fghhfgsjdgfjs'`, see `sdkjs/common/apiBase.js:2278`). */
     token: string;
+    documentCallbackUrl?: string;
     user: {
         id: string;
         username: string;
-        firstname: string | null;
-        lastname: string | null;
+        firstname?: string | null;
+        lastname?: string | null;
         indexUser: number;
     };
     editorType: number;
@@ -107,16 +114,22 @@ export interface OOClientEventAuth {
     sessionTimeIdle: number;
     documentFormatSave: number;
     isCloseCoAuthoring: boolean;
-    openCmd: Record<string, unknown> | null;
+    openCmd?: Record<string, unknown> | null;
     lang: string;
-    mode: string;
-    permissions: { edit: boolean; review: boolean };
+    mode?: "edit" | "view";
+    permissions?: {
+        edit?: boolean;
+        review?: boolean;
+        comment?: boolean;
+        fillForms?: boolean;
+        [key: string]: unknown;
+    };
     encrypted: boolean;
     IsAnonymousUser: boolean;
     timezoneOffset: number;
     headingsColor: string | null;
-    coEditingMode: string;
-    jwtOpen: string;
+    coEditingMode: "fast" | "strict";
+    jwtOpen?: string;
     jwtSession?: string;
     time: number;
     supportAuthChangesAck: boolean;
@@ -146,22 +159,26 @@ export interface OOClientEventIsSaveLock {
     syncChangesIndex: number;
 }
 
-/** A chunk of serialized document changes to persist. */
+/**
+ * A chunk of serialized document changes to persist.
+ */
 export interface OOClientEventSaveChanges {
     type: "saveChanges";
     /**
-     * JSON-encoded string of op fragments (default mode) or a real array
-     * (binary-changes mode).
+     * Serialized op changes, in one of two encodings:
+     * - default: a length-prefixed base64 string (i.e. `"<len>;<base64>"`).
+     * - when the server `auth` advertised `settings.binaryChanges`: the raw
+     *   change bytes.
      */
-    changes: string | unknown[];
+    changes: string | Uint8Array[];
     startSaveChanges: boolean;
     endSaveChanges: boolean;
-    isCoAuthoring?: boolean;
-    isExcel?: boolean;
-    deleteIndex?: number | null;
-    excelAdditionalInfo?: string | null;
-    unlock?: boolean;
-    releaseLocks?: boolean;
+    isCoAuthoring: boolean;
+    isExcel: boolean;
+    deleteIndex: number | null;
+    excelAdditionalInfo: string | null;
+    unlock: boolean;
+    releaseLocks: boolean;
     reSave?: number;
 }
 
@@ -175,8 +192,8 @@ export interface OOClientEventUnLockDocument {
     type: "unLockDocument";
     isSave: boolean;
     unlock: boolean;
-    deleteIndex?: number | null;
-    releaseLocks?: boolean;
+    deleteIndex: number | null;
+    releaseLocks: boolean;
 }
 
 /** Connection close. */
@@ -461,6 +478,11 @@ export interface OOServerEventSavePartChanges {
 export interface OOServerEventSaveLock {
     type: "saveLock";
     saveLock: boolean;
+    /**
+     * Legacy error flag read by the editor's (see `sdkjs/common/docscoapi.js:1260`),
+     * but no longer sent by the current DocumentServer.
+     */
+    error?: unknown;
 }
 
 /** Save finished (carries the new save point). */
@@ -474,8 +496,9 @@ export interface OOServerEventUnSaveLock {
 /** Hard disconnect. */
 export interface OOServerEventDrop {
     type: "drop";
-    code: number;
-    description: string;
+    /** Defaulted to 4007 by the editor when falsy. */
+    code?: number;
+    description?: string;
 }
 
 /**
@@ -529,7 +552,17 @@ export interface OOServerEventLicense {
         rights: number;
         buildVersion: string;
         buildNumber: number;
+        /** Legacy field, always false (see `DocsCoServer.js:3932`) */
+        light: false;
+        branding: boolean;
+        customization: boolean;
+        liveViewerSupport: boolean;
+        protectionSupport: boolean;
+        isAnonymousSupport: boolean;
+        advancedApi: boolean;
     };
+    /** AI-proxy plugin settings, forwarded to the host via `onAiPluginSettings` when present. */
+    aiPluginSettings?: unknown;
 }
 
 /**
