@@ -58,8 +58,14 @@ export interface OOLockEntry {
 /** A serialized change entry (server `authChanges`/`saveChanges` events). */
 export interface OOChangeEntry {
     docid: string;
-    /** JSON-encoded opaque op fragment. */
-    change: string;
+    /**
+     * A single serialized op change, in one of two encodings:
+     * - default: a JSON-quoted length-prefixed base64 string (i.e.
+     *   `'"<len>;<base64>"'`; the editor unwraps it with `JSON.parse`).
+     * - when the server `auth` advertised `settings.binaryChanges`: the raw
+     *   change bytes.
+     */
+    change: string | Uint8Array;
     time: number;
     user: string;
     useridoriginal: string;
@@ -91,12 +97,14 @@ export interface OOServerAuthSettings {
 export interface OOClientEventAuth {
     type: "auth";
     docid: string;
+    /** Editor stub token (the fork hardcodes `'fghhfgsjdgfjs'`, see `sdkjs/common/apiBase.js:2278`). */
     token: string;
+    documentCallbackUrl?: string;
     user: {
         id: string;
         username: string;
-        firstname: string | null;
-        lastname: string | null;
+        firstname?: string | null;
+        lastname?: string | null;
         indexUser: number;
     };
     editorType: number;
@@ -107,16 +115,24 @@ export interface OOClientEventAuth {
     sessionTimeIdle: number;
     documentFormatSave: number;
     isCloseCoAuthoring: boolean;
-    openCmd: Record<string, unknown> | null;
+    openCmd?: Record<string, unknown> | null;
     lang: string;
-    mode: string;
-    permissions: { edit: boolean; review: boolean };
+    mode?: "edit" | "view";
+    permissions?: {
+        edit?: boolean;
+        review?: boolean;
+        comment?: boolean;
+        fillForms?: boolean;
+        [key: string]: unknown;
+    };
     encrypted: boolean;
     IsAnonymousUser: boolean;
     timezoneOffset: number;
-    headingsColor: string | null;
-    coEditingMode: string;
-    jwtOpen: string;
+    /** Word editor only: heading color, `null` when unset. The cell/slide
+     * editors omit the field entirely. */
+    headingsColor?: string | null;
+    coEditingMode: "fast" | "strict";
+    jwtOpen?: string;
     jwtSession?: string;
     time: number;
     supportAuthChangesAck: boolean;
@@ -146,22 +162,27 @@ export interface OOClientEventIsSaveLock {
     syncChangesIndex: number;
 }
 
-/** A chunk of serialized document changes to persist. */
+/**
+ * A chunk of serialized document changes to persist.
+ */
 export interface OOClientEventSaveChanges {
     type: "saveChanges";
     /**
-     * JSON-encoded string of op fragments (default mode) or a real array
-     * (binary-changes mode).
+     * Serialized op changes, in one of two encodings:
+     * - default: a JSON-serialized array of length-prefixed base64 strings
+     *   (i.e. `'["<len>;<base64>", ...]'`).
+     * - when the server `auth` advertised `settings.binaryChanges`: an array
+     *   of the raw change bytes.
      */
-    changes: string | unknown[];
+    changes: string | Uint8Array[];
     startSaveChanges: boolean;
     endSaveChanges: boolean;
-    isCoAuthoring?: boolean;
-    isExcel?: boolean;
-    deleteIndex?: number | null;
-    excelAdditionalInfo?: string | null;
-    unlock?: boolean;
-    releaseLocks?: boolean;
+    isCoAuthoring: boolean;
+    isExcel: boolean;
+    deleteIndex: number | null;
+    excelAdditionalInfo: string | null;
+    unlock: boolean;
+    releaseLocks: boolean;
     reSave?: number;
 }
 
@@ -175,7 +196,7 @@ export interface OOClientEventUnLockDocument {
     type: "unLockDocument";
     isSave: boolean;
     unlock: boolean;
-    deleteIndex?: number | null;
+    deleteIndex: number | null;
     releaseLocks?: boolean;
 }
 
@@ -310,6 +331,16 @@ export interface OOClientEventRpc {
 }
 
 /**
+ * Legacy (dead wire message): only sent by `DocsCoApi._onUpdateVersion`
+ * (see `sdkjs/common/docscoapi.js:959`) which nothing in sdkjs calls,
+ * and DocumentServer does not handle it either (it logs "unknown command").
+ * Kept for protocol completeness.
+ */
+export interface OOClientEventUpdateVersion {
+    type: "updateVersion";
+}
+
+/**
  * Editics addition (no vanilla OO counterpart): a save has been persisted
  * up to the given change index / new version.
  */
@@ -336,6 +367,7 @@ export type OOClientEvent =
     | OOClientEventExtendSession
     | OOClientEventForceSaveStart
     | OOClientEventRpc
+    | OOClientEventUpdateVersion
     | OOClientEventSaveDone;
 
 // --- Server events (server -> editor) -------------------------------------
@@ -401,6 +433,21 @@ export interface OOServerEventCursor {
     }[];
 }
 
+/**
+ * Document metadata broadcast (e.g. after a WOPI rename). The editor applies
+ * `messages.title` as the new document name and forwards the whole object
+ * to the host (`asc_onMeta`).
+ */
+export interface OOServerEventMeta {
+    type: "meta";
+    messages: {
+        /** New document title. */
+        title?: string;
+        /** Integrator-defined metadata, passed through to the host. */
+        [key: string]: unknown;
+    };
+}
+
 /** Element-lock grants (reply to the editor's `getLock` request). */
 export interface OOServerEventGetLock {
     type: "getLock";
@@ -421,7 +468,7 @@ export interface OOServerEventSaveChanges {
     syncChangesIndex: number;
     endSaveChanges: boolean;
     locks?: OOSavedLockEntry[];
-    excelAdditionalInfo?: string;
+    excelAdditionalInfo?: string | null;
 }
 
 /** Ack of an intermediate `saveChanges` chunk. */
@@ -435,6 +482,11 @@ export interface OOServerEventSavePartChanges {
 export interface OOServerEventSaveLock {
     type: "saveLock";
     saveLock: boolean;
+    /**
+     * Legacy error flag read by the editor's (see `sdkjs/common/docscoapi.js:1260`),
+     * but no longer sent by the current DocumentServer.
+     */
+    error?: unknown;
 }
 
 /** Save finished (carries the new save point). */
@@ -448,6 +500,37 @@ export interface OOServerEventUnSaveLock {
 /** Hard disconnect. */
 export interface OOServerEventDrop {
     type: "drop";
+    /** Defaulted to 4007 by the editor when falsy. */
+    code?: number;
+    description?: string;
+}
+
+/**
+ * Fatal server error, handled by the client exactly like a `drop`.
+ *
+ * This is a legacy error event (marked as "Old SDK version" in client dispatching code),
+ * and predates the structured `disconnectReason`/`warning` events.
+ */
+export interface OOServerEventError {
+    type: "error";
+    /**
+     * OnlyOffice server error code (4008 = update version, 4009 = no cache, 4010 = restore).
+     * Defaults to 4007 = drop if ommited.
+     */
+    code?: number;
+    /** Human-readable reason (e.g. "Update Version error", "User id too long"). */
+    description: string;
+}
+
+/**
+ * The server is about to close the connection (server shutdown, client session expiry,
+ * access denied, JWT error).
+ * Unlike `drop` the client keeps its channel open and only reports the reason
+ * through `onDisconnect`.
+ */
+export interface OOServerEventDisconnectReason {
+    type: "disconnectReason";
+    /** 4001 shutdown, 4002 idle, 4003 absolute, 4004 access denied, 4006 jwt error. */
     code: number;
     description: string;
 }
@@ -461,8 +544,11 @@ export interface OOServerEventWarning {
 
 /**
  * License injection, read by the editor's `DocsCoApi._onLicense` — without it
- * the editor idles in WaitAuth and never opens. (Missing from protocol.js's
- * `OOServerEvent` list by mistake.)
+ * the editor idles in WaitAuth and never opens.
+ *
+ * The real DocumentServer always sends all the license fields (see
+ * `DocsCoServer.js::_checkLicense`), but the editor tolerates some of their
+ * absence.
  */
 export interface OOServerEventLicense {
     type: "license";
@@ -473,7 +559,119 @@ export interface OOServerEventLicense {
         rights: number;
         buildVersion: string;
         buildNumber: number;
+        /** Legacy field, always `false` server-side ("todo remove in sdk"). */
+        light?: false;
+        /** Omitted -> treated as `false`. */
+        branding?: boolean;
+        /** Omitted -> treated as `false`. */
+        customization?: boolean;
+        /** Omitted -> treated as `false`. */
+        liveViewerSupport?: boolean;
+        /** Omitted -> the editor keeps its default value. */
+        protectionSupport?: boolean;
+        /** Omitted -> the editor keeps its default value. */
+        isAnonymousSupport?: boolean;
+        /** Omitted -> treated as `false`. */
+        advancedApi?: boolean;
     };
+    /** AI-proxy plugin settings, forwarded to the host via `onAiPluginSettings` when present. */
+    aiPluginSettings?: unknown;
+}
+
+/**
+ * Session-expiry warning.
+ * On the idle code the editor answers with `extendSession` if the user was active
+ * enough, otherwise (and always on the absolute code) it saves and disconnects.
+ */
+export interface OOServerEventSession {
+    type: "session";
+    messages: {
+        /** 4002=sessionIdle or 4003=sessionAbsolute. */
+        code: number;
+        reason: string;
+        /** Idle only: inactivity threshold in ms the editor must stay under to extend. */
+        interval?: number;
+    };
+}
+
+/**
+ * A fresh session JWT (e.g. after a display-name change re-signed the token).
+ * The client just stores it as its new `jwtSession`.
+ */
+export interface OOServerEventRefreshToken {
+    type: "refreshToken";
+    messages: string;
+}
+
+/**
+ * Legacy token-expiry notice.
+ * Handled in `DocsCoApi._onServerMessage` (see `sdkjs/common/docscoapi.js:1841`),
+ * but the server never sends it.
+ * Kept for protocol completeness.
+ */
+export interface OOServerEventExpiredToken {
+    type: "expiredToken";
+    /** Close code mapped to an error dialog (e.g. 4005 = jwt expired). */
+    code?: number;
+}
+
+/**
+ * Reply to the editor's `forceSaveStart` request (its Save-button force
+ * save): carries DocumentServer's `startForceSave` result.
+ */
+export interface OOServerEventForceSaveStart {
+    type: "forceSaveStart";
+    messages: {
+        /** 0 = started, 4 = not modified, 3 = unknown error. */
+        code: number;
+        /** Save-point timestamp. `null` when no save was started. */
+        time: number | null;
+        /** A force save is already running. Its completion arrives as `forceSave`. */
+        inProgress?: boolean;
+        /** Not-modified reply: url of the previous save. */
+        url?: string;
+    };
+}
+
+/**
+ * A force save started (timeouts) or finished (DocumentServer broadcasts
+ * the progress to the co-editors). Drives the editor's force-save UI.
+ */
+export interface OOServerEventForceSave {
+    type: "forceSave";
+    messages: {
+        /** 0 = command, 1 = button, 2 = timeout, 3 = form. */
+        type: number;
+        /** Save-point timestamp matching start and completion. */
+        time: number;
+        /** Timeout saves announce their start with `start: true`. */
+        start?: boolean;
+        /** Completion: whether the save succeeded. */
+        success?: boolean;
+    };
+}
+
+/**
+ * Reply to the editor's `rpc` call (DocumentServer's `sendDataRpc`):
+ * resolves the callback registered under the same `responseKey`
+ * (`DocsCoApi.callPRC`).
+ */
+export interface OOServerEventRpc {
+    type: "rpc";
+    /** Must echo the `responseKey` of the answered call. */
+    responseKey: number;
+    data: unknown;
+}
+
+/**
+ * The document version changed server-side (DocumentServer's
+ * `updateVersion` publish, e.g. a finalized form or a live-view refresh).
+ * The editor forwards `success` to the host (web-apps shows the reload
+ * banner).
+ */
+export interface OOServerEventUpdateVersion {
+    type: "updateVersion";
+    success: boolean;
 }
 
 /** Status of an `OOServerEventDocumentOpen` reply (DocumentServer `OutputData`). */
@@ -528,7 +726,7 @@ export interface OODocumentOpenResult {
 /**
  * Reply to the editor's `openDocument` request (and to the initial `open`
  * carried by the `auth` handshake's `openCmd`). Read by the editor's
- * `DocsCoApi._documentOpen` → `CoAuthoringApi.onDocumentOpen`
+ * `DocsCoApi._documentOpen` -> `CoAuthoringApi.onDocumentOpen`
  * (sdkjs/common/apiBase.js:2177): `open`/`reopen` drive the document
  * bootstrap, any other `type` is routed to the `sendCommand` callback
  * registered for the matching request.
@@ -545,6 +743,7 @@ export type OOServerEvent =
     | OOServerEventAuthChanges
     | OOServerEventMessage
     | OOServerEventCursor
+    | OOServerEventMeta
     | OOServerEventGetLock
     | OOServerEventReleaseLock
     | OOServerEventSaveChanges
@@ -552,8 +751,17 @@ export type OOServerEvent =
     | OOServerEventSaveLock
     | OOServerEventUnSaveLock
     | OOServerEventDrop
+    | OOServerEventError
+    | OOServerEventDisconnectReason
     | OOServerEventWarning
     | OOServerEventLicense
+    | OOServerEventSession
+    | OOServerEventRefreshToken
+    | OOServerEventExpiredToken
+    | OOServerEventForceSaveStart
+    | OOServerEventForceSave
+    | OOServerEventRpc
+    | OOServerEventUpdateVersion
     | OOServerEventDocumentOpen;
 
 // ---------------------------------------------------------------------------
