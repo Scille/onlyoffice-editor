@@ -946,6 +946,19 @@ export interface OOHostHooks {
     ) => void;
 
     /**
+     * Called by `apiBase.downloadAs` when serializing the document for a
+     * download/print failed (e.g. an sdkjs bug while laying out the document
+     * for PDF), in which case `downloadAs`/`printPdf` is never called.
+     * The editor's blocking action has already been ended when this is called.
+     *
+     * The error is rethrown afterward, so a host calling `asc_DownloadAs` may
+     * also catch it synchronously. The hook covers the case where the download
+     * was postponed until the end of the document recalculation, and so runs
+     * outside of the host's call.
+     */
+    downloadAsError?: (error: unknown) => void;
+
+    /**
      * Resolve a document image source to a fetchable URL. Called by the
      * image loader when the src looks like a CryptPad media tag
      * ("#channel=...", sdkjs/common/GlobalLoaders.js:639); the callback must

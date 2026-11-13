@@ -2594,11 +2594,39 @@
 			oAdditionalData["textParams"] = {"association": options.textParams.asc_getAssociation()};
 		}
 
-		if (this._downloadAs(actionType, options, oAdditionalData, dataContainer, downloadType))
+		// Parsec: if serializing the document fails (e.g. an sdkjs bug while laying
+		// out the document for PDF), the blocking action started above is never
+		// ended: the "Downloading document" modal stays forever and the editor
+		// refuses any further download (`isLongAction()`).
+		// So we end the action and notify the host before rethrowing.
+		//
+		// Note we don't send `asc_onError`, as hosts usually treat it as a fatal
+		// editor error, while the document itself is not affected.
+		//
+		// The `downloadAsError` hook is needed since this function is not always
+		// called synchronously by the host's `asc_DownloadAs` call: when the document
+		// is still being recalculated, the download is postponed (see `_waitPrint`)
+		// and called again once done, so the host cannot catch the error itself.
+		try
 		{
-			return;
+			if (this._downloadAs(actionType, options, oAdditionalData, dataContainer, downloadType))
+			{
+				return;
+			}
+			this._downloadAsUsingServer(actionType, options, oAdditionalData, dataContainer, downloadType);
 		}
-		this._downloadAsUsingServer(actionType, options, oAdditionalData, dataContainer, downloadType);
+		catch (err)
+		{
+			if (actionType)
+			{
+				this.sync_EndAction(c_oAscAsyncActionType.BlockInteraction, actionType);
+			}
+			if (window.parent.APP && window.parent.APP.downloadAsError)
+			{
+				window.parent.APP.downloadAsError(err);
+			}
+			throw err;
+		}
 	};
 	baseEditorsApi.prototype._downloadAsUsingServer                        = function (actionType, options, oAdditionalData, dataContainer, downloadType)
 	{
